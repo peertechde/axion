@@ -1,0 +1,500 @@
+swagger: "2.0"
+info:
+  title: Configuration Management
+  version: 0.0.1
+  description: |
+    REST API for managing system resources with idempotent semantics. Includes support for
+    optimistic concurrency using ETags.
+
+consumes:
+  - "application/json"
+produces:
+  - "application/json"
+
+schemes:
+  - http
+  - https
+
+basePath: "/api/v1/"
+
+tags:
+  - name: Content
+    description: File content operations
+  - name: Command
+    description: Command system resource management
+  - name: Files
+    description: File system resource management
+  - name: Directories
+    description: Directory system resource management
+
+paths:
+  /upload:
+    post:
+      summary: Upload file or directory content as compressed TAR archive
+      description: |
+        Uploads content as a gzip-compressed TAR archive. For single files, the archive
+        contains one file. For directories, the archive contains the entire directory
+        structure with all files and subdirectories.
+      operationId: upload
+      tags:
+        - Content
+      consumes:
+        - application/octet-stream
+      parameters:
+        - $ref: "#/parameters/FilePath"
+        - name: recursive
+          in: query
+          type: boolean
+          default: false
+          description: |
+            When true, treat the path as a directory and extract the entire archive
+            contents. When false, extract as a single file (archive must contain only one
+            file).
+        - name: content
+          in: body
+          required: true
+          schema:
+            type: string
+            format: binary
+            description: Binary TAR archive containing file(s) to upload
+      responses:
+        201:
+          description: Content uploaded successfully (new file/directory created)
+        204:
+          description: Content uploaded successfully (existing file/directory updated)
+        400:
+          description: Invalid request, malformed archive, or path conflicts
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: Path type mismatch (file vs directory conflict)
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        413:
+          description: Archive too large
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        422:
+          description: Invalid archive format or extraction failed
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error during upload or extraction
+          schema:
+            $ref: "#/responses/ErrorResponse"
+  /download:
+    get:
+      summary: Download file or directory content as compressed TAR archive
+      description: |
+        Downloads content as a gzip-compressed TAR archive. For single files, returns a
+        TAR archive containing the single file. For directories, returns a TAR archive
+        containing the entire directory structure.
+      operationId: download
+      tags:
+        - Content
+      produces:
+        - application/octet-stream
+      parameters:
+        - $ref: "#/parameters/FilePath"
+        - name: recursive
+          in: query
+          type: boolean
+          default: false
+          description: |
+            When true, treat the path as a directory and include all contents recursively.
+            When false, treat as a single file.
+      responses:
+        200:
+          description: Content downloaded successfully
+          headers:
+            Content-Disposition:
+              type: string
+              description: "attachment; filename with .tar.gz extension"
+            X-Archive-Format:
+              type: string
+              enum: [tar.gz]
+              description: "Indicates the archive format"
+            X-Archive-Type:
+              type: string
+              enum: [file, directory]
+              description: "Indicates whether archive contains a single file or directory structure"
+          schema:
+            type: string
+            format: binary
+            description: Binary file data
+        400:
+          description: Invalid request or missing path
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        404:
+          description: File or directory not found
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: Path type mismatch (requested file but found directory or vice versa)
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal error while creating archive
+          schema:
+            $ref: "#/responses/ErrorResponse"
+  /command:
+    post:
+      summary: Execute a command on the target system
+      description: |
+        Executes a command on the target system and returns the result. Commands are
+        executed with a configurable timeout and expected exit codes.
+      operationId: executeCommand
+      tags:
+        - Command
+      consumes:
+        - application/json
+      produces:
+        - application/json
+      parameters:
+        - in: body
+          name: command
+          required: true
+          schema:
+            $ref: "#/definitions/CommandRequest"
+      responses:
+        200:
+          description: Command executed successfully
+          schema:
+            $ref: "#/definitions/CommandResponse"
+        400:
+          description: Invalid request or malformed command
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        408:
+          description: Command execution timeout
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error during command execution
+          schema:
+            $ref: "#/responses/ErrorResponse"
+  /files:
+    get:
+      summary: Retrieve the current state and properties of a file
+      description: |
+        Fetches properties about the specified file, including its permissions, ownership
+        and hash checksum.
+      operationId: getFileProperties
+      tags:
+        - Files
+      parameters:
+        - $ref: "#/parameters/FilePath"
+      responses:
+        200:
+          $ref: "#/responses/FilePropertiesResponse"
+        400:
+          description: Invalid request or missing fields
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        404:
+          description: File not found
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+    put:
+      summary: Create or update properties for a file
+      description: |
+        Creates a new file if it does not exist or updates properties (mode, owner, group)
+        if the file exists. Operation is idempotent: repeating the same request yields the
+        same result. File content must be managed separately.
+      operationId: putFile
+      tags:
+        - Files
+      parameters:
+        - $ref: "#/parameters/FilePath"
+        - $ref: "#/parameters/IfMatch"
+        - in: body
+          name: properties
+          required: true
+          schema:
+            $ref: "#/definitions/FileProperties"
+      responses:
+        201:
+          description: File created and properties were applied
+          headers:
+            ETag:
+              type: string
+              description: New ETag for the updated file
+        204:
+          description: File already existed and properties were either applied or already correct
+          headers:
+            ETag:
+              type: string
+              description: New ETag for the updated file
+        400:
+          description: Invalid request, bad path or unresolvable owner/group
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: Conflict due to conditional check failure (e.g. ETag mismatch)
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        412:
+          description: Precondition failed
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        428:
+          description: Missing If-Match header
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+    delete:
+      summary: Delete an existing file
+      description: Removes the specified file from the system
+      operationId: deleteFile
+      tags:
+        - Files
+      parameters:
+        - $ref: "#/parameters/FilePath"
+        - $ref: "#/parameters/IfMatch"
+      responses:
+        204:
+          description: File deleted
+        400:
+          description: Invalid request or missing fields
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        403:
+          description: Forbidden
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: Conflict due to conditional check failure (e.g. ETag mismatch)
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        428:
+          description: Missing If-Match header
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+  /directories:
+    get:
+      summary: Retrieve the current state and properties of a directory
+      description: |
+        Fetches properties about the specified directory, including its permissions and
+        ownership.
+      operationId: getDirectoryProperties
+      tags:
+        - Directories
+      parameters:
+        - $ref: "#/parameters/DirectoryPath"
+      responses:
+        200:
+          $ref: "#/responses/DirectoryPropertiesResponse"
+        400:
+          description: Invalid request or missing fields
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        404:
+          description: Directory not found
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+    put:
+      summary: Create or update properties for a directory
+      description: |
+        Creates a new directory if it does not exist or updates properties (mode, owner,
+        group) if the directory exists. Creates parent directories as needed.
+      operationId: putDirectory
+      tags:
+        - Directories
+      parameters:
+        - $ref: "#/parameters/DirectoryPath"
+        - $ref: "#/parameters/IfMatch"
+        - in: body
+          name: properties
+          required: true
+          schema:
+            $ref: "#/definitions/DirectoryProperties"
+      responses:
+        201:
+          description: Directory created and properties were applied
+          headers:
+            ETag:
+              type: string
+        204:
+          description: Directory already existed and properties were applied
+          headers:
+            ETag:
+              type: string
+        400:
+          description: Invalid request
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: ETag mismatch
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        412:
+          description: Precondition failed
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        428:
+          description: Missing If-Match header
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+    delete:
+      summary: Delete an existing directory
+      description: Removes the specified directory from the system
+      operationId: deleteDirectory
+      tags:
+        - Directories
+      parameters:
+        - $ref: "#/parameters/DirectoryPath"
+        - $ref: "#/parameters/IfMatch"
+      responses:
+        204:
+          description: Directory deleted
+        400:
+          description: Invalid request
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        403:
+          description: Forbidden
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        409:
+          description: ETag mismatch
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        428:
+          description: Missing If-Match header
+          schema:
+            $ref: "#/responses/ErrorResponse"
+        500:
+          description: Internal server error
+          schema:
+            $ref: "#/responses/ErrorResponse"
+
+parameters:
+  IfMatch:
+    name: If-Match
+    in: header
+    type: string
+    required: false
+    description: ETag value for optimistic concurrency control
+  FilePath:
+    name: path
+    in: query
+    required: true
+    type: string
+    description: Absolute file path on the target system
+  DirectoryPath:
+    name: path
+    in: query
+    required: true
+    type: string
+    description: Absolute directory path on the target system
+
+responses:
+  ErrorResponse:
+    description: Standard error response
+    schema:
+      $ref: "#/definitions/Error"
+
+  FilePropertiesResponse:
+    description: File properties with metadata
+    headers:
+      ETag:
+        type: string
+        description: ETag for optimistic concurrency control
+    schema:
+      $ref: "#/definitions/FileProperties"
+  DirectoryPropertiesResponse:
+    description: Directory properties with metadata
+    headers:
+      ETag:
+        type: string
+        description: ETag for optimistic concurrency control
+    schema:
+      $ref: "#/definitions/DirectoryProperties"
+
+definitions:
+  Error:
+    type: object
+    properties:
+      code:
+        type: integer
+      message:
+        type: string
+        description: Human-readable error message
+      details:
+        type: string
+        description: Additional error details for debugging
+  CommandRequest:
+    type: object
+    properties:
+      command:
+        type: string
+        description: The command to execute
+        example: "ls -la /etc"
+      expected_exit_codes:
+        type: array
+        items:
+          type: integer
+        default: [0]
+        description: Expected exit codes for success (default [0])
+  CommandResponse:
+    type: object
+    properties:
+      exit_code:
+        type: integer
+        description: Command exit code
+      stdout:
+        type: string
+        description: Standard output from command
+      stderr:
+        type: string
+        description: Standard error from command
+      success:
+        type: boolean
+        description: Whether command execution was considered successful
+  FileProperties:
+    type: object
+    properties:
+      mode:
+        type: string
+        pattern: '^[0-7]{3,4}$'
+        description: File permissions in octal format (e.g., "0644")
+        example: "0644"
+      owner:
+        type: string
+      group:
+        type: string
+      checksum:
+        type: string
+        description: SHA-256 checksum of file content
+  DirectoryProperties:
+    type: object
+    properties:
+      mode:
+        type: string
+        pattern: '^[0-7]{3,4}$'
+        description: Directory permissions in octal format (e.g., "0755")
+        example: "0755"
+      owner:
+        type: string
+      group:
+        type: string

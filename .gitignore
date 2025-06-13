@@ -1,0 +1,7 @@
+# OpenAPI generated code
+api/client/
+api/models/
+api/restapi/
+
+# Builds
+bin/
