@@ -1,10 +1,10 @@
 # Axion - Declarative Configuration Management
 
-**Axion** is a modern configuration management solution that enforces desired system state through declarative manifests. Built for reliability and performance, it separates orchestration logic from execution to provide a clean, robust architecture for infrastructure as code.
+**Axion** is a modern configuration management solution that enforces desired system state through declarative manifests. Built for reliability and performance, it separates orchestration logic from execution to provide a clean, robust architecture for system configuration management.
 
 ## 🎬 Live Demo
 
-The following demonstrations show the core `plan` and `apply` workflow.
+The following demonstration shows the core `plan` and `apply` workflow.
 
 ![Axion Demo](/.github/assets/recording.gif)
 
